@@ -1,0 +1,16 @@
+{
+    "version": "1.0.0-*",
+    "compilationOptions": {
+        "emitEntryPoint": true
+    },
+
+    "dependencies": {
+        "NETStandard.Library": "1.0.0-rc2-23811",
+        "System.Security.Cryptography.Algorithms":"4.0.0-rc2-*",
+        "System.Text.Encoding":"4.0.11-rc2-*"
+    },
+
+    "frameworks": {
+        "dnxcore50": { }
+    }
+}
