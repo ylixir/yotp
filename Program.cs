@@ -69,7 +69,7 @@ namespace yotp {
       return result;
     }
     /// <summary>
-    /// Convert the secret from a string to a byte sequence.
+    /// Convert the secret from a hex string to a byte sequence.
     /// </summary>
     /// <param name="secret">Secret.</param>
     protected static byte[] hex_key(string secret) {
@@ -80,6 +80,10 @@ namespace yotp {
       return result;
     }
 
+    /// <summary>
+    /// Convert the secret from a base32 string to a byte sequence.
+    /// </summary>
+    /// <param name="secret">Secret.</param>
     protected static byte[] base32_key(string secret) {
       int buffer=0;
       byte[] result = new byte[10];
