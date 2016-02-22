@@ -22,16 +22,123 @@ using System.Globalization;
 using System.Collections.Generic;
 
 namespace yotp {
+  class HOTP {
+    /// <summary>
+    /// This is the secret that is hashed and salted to generate the one time password.
+    /// </summary>
+    protected byte[] K;
+    /// <summary>
+    /// This is the counter that is used to salt the hash when generating the password.
+    /// </summary>
+    protected byte[] C;
+    /// <summary>
+    /// The thing that does the HMAC algorithm as referenced in RFC 4226.
+    /// </summary>
+    /// <returns>The SHA1 hash.</returns>
+    /// <param name="K">Secret key.</param>
+    /// <param name="C">Count.</param>
+    protected HMAC HMACHasher;
+    protected byte[] Hash{
+      get{
+        return HMACHasher.ComputeHash (C);
+      }
+    }
+
+    public HOTP(){
+      HMACHasher = new HMACSHA1 ();
+      K = HMACHasher.Key;
+    }
+    protected static byte[] HMAC_SHA_1(byte[] K, byte[] C) {
+      HMACSHA1 hmac = new HMACSHA1(K);
+      return hmac.ComputeHash (C);
+    }
+    /// <summary>
+    /// Convert the key to and from a base32 string.
+    /// </summary>
+    public string base32_secret{
+      set{
+        int buffer=0;
+        K = new byte[10];
+        //the dictionary should throw an exception whenever we hit anything not in it
+        //this is ideal for now, but as the program grows this may require a subtler touch
+        Dictionary<char,int> value_lookup = new Dictionary<char, int> () {
+          {'A', 0},{'B', 1},{'C', 2},{'D', 3},{'E', 4},{'F', 5},{'G', 6},{'H', 7},
+          {'I', 8},{'J', 9},{'K',10},{'L',11},{'M',12},{'N',13},{'O',14},{'P',15},
+          {'Q',16},{'R',17},{'S',18},{'T',19},{'U',20},{'V',21},{'W',22},{'X',23},
+          {'Y',24},{'Z',25},{'2',26},{'3',27},{'4',28},{'5',29},{'6',30},{'7',31},
+          {'0',14},{'1', 8},{'l',8}
+        };
+        buffer = value_lookup[value[0]];
+        for (int i = 1; i < 80; i++) {
+          if (0 == i % 5) {
+            buffer <<= 5;
+            buffer |= value_lookup[value[i/5]];
+          }
+          if (0 == i % 8) {
+            //(i/5+1)*5-i) is the number of low order bits that we can't use yet
+            K[i / 8 - 1] = (byte)(buffer>>(i/5+1)*5-i);
+          }
+        };
+        K[9] = (byte)buffer;
+      }
+    }
+
+    /// <summary>
+    /// Convert the key to and from it's hex string representation.
+    /// </summary>
+    public string hex_secret{
+      set{
+        K = new byte[value.Length/2];
+        for (int i = 0; i < value.Length; i += 2)
+          K[i/2]=(byte)Int16.Parse(value.Substring (i,2),NumberStyles.AllowHexSpecifier);
+      }
+      get{
+        return BitConverter.ToString(K).Replace("-","");
+      }
+      
+    }
+    
+    /// <summary>
+    /// Truncate the hash as specified in RFC 4226.
+    /// </summary>
+    /// <param name="hash">Hash.</param>
+    protected static int Truncate(byte[] hash) {
+      int result = 0;
+      int offset = hash [19] & 0x0f;
+      for (int i = 0; i < 4; i++) {
+        result |= ((int)(hash [3 - i + offset])) << (i*8);
+      }
+      return result;
+    }
+  }
+
+  class TOTP: HOTP {
+    public const long DefaultTimeStep = 30;
+    
+    /// <summary>
+    /// The timestep, with variable name chosen by rfc 6238.
+    /// </summary>
+    private long X;
+    /// <summary>
+    /// How long each password is good for in seconds.
+    /// </summary>
+    public long TimeStep{
+      get{
+        return X;
+      }
+      set{
+        X=value;
+      }
+    }
+    
+  }
   class MainClass {
     /// <summary>
     /// Time zero. The unix epoch.
     /// </summary>
     protected static readonly long T0 = 0;
     protected static readonly DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-    /// <summary>
-    /// The timestep, with variable name chosen by rfc 6238.
-    /// </summary>
-    protected static readonly long X = 30;
+   protected static readonly long X = 30;
 
     /// <summary>
     /// Unix time for the specified t.
@@ -56,72 +163,8 @@ namespace yotp {
         result[7-i]=(byte)(count_int>>(i*8));
       return result;
     }
-    /// <summary>
-    /// Truncate the hash as specified in RFC 4226.
-    /// </summary>
-    /// <param name="hash">Hash.</param>
-    protected static int Truncate(byte[] hash) {
-      int result = 0;
-      int offset = hash [19] & 0x0f;
-      for (int i = 0; i < 4; i++) {
-        result |= ((int)(hash [3 - i + offset])) << (i*8);
-      }
-      return result;
-    }
-    /// <summary>
-    /// Convert the secret from a hex string to a byte sequence.
-    /// </summary>
-    /// <param name="secret">Secret.</param>
-    protected static byte[] hex_key(string secret) {
-      byte[] result = new byte[secret.Length/2];
-      for (int i = 0; i < secret.Length; i += 2) {
-        result[i/2]=(byte)Int16.Parse(secret.Substring (i,2),NumberStyles.AllowHexSpecifier);
-      }
-      return result;
-    }
 
-    /// <summary>
-    /// Convert the secret from a base32 string to a byte sequence.
-    /// </summary>
-    /// <param name="secret">Secret.</param>
-    protected static byte[] base32_key(string secret) {
-      int buffer=0;
-      byte[] result = new byte[10];
-      //the dictionary should throw an exception whenever we hit anything not in it
-      //this is ideal for now, but as the program grows this may require a subtler touch
-      Dictionary<char,int> value_lookup = new Dictionary<char, int> () {
-        {'A', 0},{'B', 1},{'C', 2},{'D', 3},{'E', 4},{'F', 5},{'G', 6},{'H', 7},
-        {'I', 8},{'J', 9},{'K',10},{'L',11},{'M',12},{'N',13},{'O',14},{'P',15},
-        {'Q',16},{'R',17},{'S',18},{'T',19},{'U',20},{'V',21},{'W',22},{'X',23},
-        {'Y',24},{'Z',25},{'2',26},{'3',27},{'4',28},{'5',29},{'6',30},{'7',31},
-        {'0',14},{'1', 8},{'l',8}
-      };
-      buffer = value_lookup[secret[0]];
-      for (int i = 1; i < 80; i++) {
-        if (0 == i % 5) {
-          buffer <<= 5;
-          buffer |= value_lookup[secret[i/5]];
-        }
-        if (0 == i % 8) {
-          //(i/5+1)*5-i) is the number of low order bits that we can't use yet
-          result [i / 8 - 1] = (byte)(buffer>>(i/5+1)*5-i);
-          buffer &= -1 ^ (0xFF << (i/5+1)*5-i); //discard the bits we just used
-        }
-      };
-      result [9] = (byte)buffer;
-      return result;
-    }
 
-    /// <summary>
-    /// Do the HMAC algorithm as referenced in RFC 4226.
-    /// </summary>
-    /// <returns>The SHA1 hash.</returns>
-    /// <param name="K">Secret key.</param>
-    /// <param name="C">Count.</param>
-    protected static byte[] HMAC_SHA_1(byte[] K, byte[] C) {
-      HMACSHA1 hmac = new HMACSHA1(K);
-      return hmac.ComputeHash (C);
-    }
 
     public static int Main (string[] args) {
       if (0==args.Length) {
