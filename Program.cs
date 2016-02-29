@@ -24,20 +24,22 @@ using System.Collections.Generic;
 namespace yotp {
   class HOTP {
     /// <summary>
-    /// This is the secret that is hashed and salted to generate the one time password.
-    /// </summary>
-    protected byte[] K;
-    /// <summary>
-    /// This is the counter that is used to salt the hash when generating the password.
-    /// </summary>
-    protected byte[] C;
-    /// <summary>
     /// The thing that does the HMAC algorithm as referenced in RFC 4226.
     /// </summary>
     /// <returns>The SHA1 hash.</returns>
-    /// <param name="K">Secret key.</param>
-    /// <param name="C">Count.</param>
     protected HMAC HMACHasher;
+    /// <summary>
+    /// This is the secret that is hashed and salted to generate the one time password.
+    /// </summary>
+    protected virtual byte[] K{
+      get { return HMACHasher.Key; }
+      set { HMACHasher.Key = value; }
+    }
+    /// <summary>
+    /// This is the counter that is used to salt the hash when generating the password.
+    /// </summary>
+    protected virtual byte[] C;
+
     protected byte[] Hash{
       get{
         return HMACHasher.ComputeHash (C);
@@ -46,11 +48,7 @@ namespace yotp {
 
     public HOTP(){
       HMACHasher = new HMACSHA1 ();
-      K = HMACHasher.Key;
-    }
-    protected static byte[] HMAC_SHA_1(byte[] K, byte[] C) {
-      HMACSHA1 hmac = new HMACSHA1(K);
-      return hmac.ComputeHash (C);
+      C = {0};
     }
     /// <summary>
     /// Convert the key to and from a base32 string.
@@ -58,7 +56,7 @@ namespace yotp {
     public string base32_secret{
       set{
         int buffer=0;
-        K = new byte[10];
+        byte[] secret = new byte[value.Length*5/8];//5 bits per base 32 digit, 8 bits per byte
         //the dictionary should throw an exception whenever we hit anything not in it
         //this is ideal for now, but as the program grows this may require a subtler touch
         Dictionary<char,int> value_lookup = new Dictionary<char, int> () {
@@ -68,19 +66,22 @@ namespace yotp {
           {'Y',24},{'Z',25},{'2',26},{'3',27},{'4',28},{'5',29},{'6',30},{'7',31},
           {'0',14},{'1', 8},{'l',8}
         };
-        buffer = value_lookup[value[0]];
-        for (int i = 1; i < 80; i++) {
-          if (0 == i % 5) {
+        buffer = value_lookup[value[0]]; //get the bits for the first digit
+        for (int i = 1; i < value.Length*5; i++) { //loop once for each bit, only do work on boundary bits thought
+          if (0 == i % 5) { //we need the next digits bits
             buffer <<= 5;
             buffer |= value_lookup[value[i/5]];
           }
-          if (0 == i % 8) {
+          if (0 == i % 8) { //we have another byte worth of bits
             //(i/5+1)*5-i) is the number of low order bits that we can't use yet
-            K[i / 8 - 1] = (byte)(buffer>>(i/5+1)*5-i);
+            secret[i / 8 - 1] = (byte)(buffer>>(i/5+1)*5-i);
           }
         };
-        K[9] = (byte)buffer;
+        //don't forget the last byte
+        secret[value*5/8-1] = (byte)buffer;
+        K = secret;
       }
+      //TODO make a get property here
     }
 
     /// <summary>
@@ -88,9 +89,9 @@ namespace yotp {
     /// </summary>
     public string hex_secret{
       set{
-        K = new byte[value.Length/2];
+        byte[] secret = new byte[value.Length/2];
         for (int i = 0; i < value.Length; i += 2)
-          K[i/2]=(byte)Int16.Parse(value.Substring (i,2),NumberStyles.AllowHexSpecifier);
+          secret[i/2]=(byte)Int16.Parse(value.Substring (i,2),NumberStyles.AllowHexSpecifier);
       }
       get{
         return BitConverter.ToString(K).Replace("-","");
@@ -101,14 +102,21 @@ namespace yotp {
     /// <summary>
     /// Truncate the hash as specified in RFC 4226.
     /// </summary>
-    /// <param name="hash">Hash.</param>
-    protected static int Truncate(byte[] hash) {
+    protected int Truncate() {
       int result = 0;
-      int offset = hash [19] & 0x0f;
+      byte[] hash = this.Hash; //just compute the hash once here
+      int offset = hash[19] & 0x0f;
       for (int i = 0; i < 4; i++) {
-        result |= ((int)(hash [3 - i + offset])) << (i*8);
+        result |= ((int)(hash[3 - i + offset])) << (i*8);
       }
       return result;
+    }
+
+    /// <summary>
+    /// The hotp value. Really just forward to truncate.
+    /// </summary>
+    public int Value {
+      get { return Truncate (); }
     }
   }
 
@@ -172,10 +180,10 @@ namespace yotp {
 				return 1;
 			}
       foreach (string secret in args) {
-        byte[] K;
-        if(20 == secret.Length)
+        //checking for mods is far from foolproof, but better than checking the length
+        if(0 == secret.Length%5)
           K = hex_key (secret);
-        else if(16 == secret.Length)
+        else if(0 == secret.Length%8)
           K = base32_key(secret);
         else
         {
