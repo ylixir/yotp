@@ -36,21 +36,6 @@ namespace yotp {
       set { HMACHasher.Key = value; }
     }
     /// <summary>
-    /// This is the counter that is used to salt the hash when generating the password.
-    /// </summary>
-    protected virtual byte[] C;
-
-    protected byte[] Hash{
-      get{
-        return HMACHasher.ComputeHash (C);
-      }
-    }
-
-    public HOTP(){
-      HMACHasher = new HMACSHA1 ();
-      C = {0};
-    }
-    /// <summary>
     /// Convert the key to and from a base32 string.
     /// </summary>
     public string base32_secret{
@@ -59,6 +44,7 @@ namespace yotp {
         byte[] secret = new byte[value.Length*5/8];//5 bits per base 32 digit, 8 bits per byte
         //the dictionary should throw an exception whenever we hit anything not in it
         //this is ideal for now, but as the program grows this may require a subtler touch
+        //TODO replace the dictionary with logic
         Dictionary<char,int> value_lookup = new Dictionary<char, int> () {
           {'A', 0},{'B', 1},{'C', 2},{'D', 3},{'E', 4},{'F', 5},{'G', 6},{'H', 7},
           {'I', 8},{'J', 9},{'K',10},{'L',11},{'M',12},{'N',13},{'O',14},{'P',15},
@@ -78,7 +64,7 @@ namespace yotp {
           }
         };
         //don't forget the last byte
-        secret[value*5/8-1] = (byte)buffer;
+        secret[value.Length*5/8-1] = (byte)buffer;
         K = secret;
       }
       //TODO make a get property here
@@ -92,13 +78,52 @@ namespace yotp {
         byte[] secret = new byte[value.Length/2];
         for (int i = 0; i < value.Length; i += 2)
           secret[i/2]=(byte)Int16.Parse(value.Substring (i,2),NumberStyles.AllowHexSpecifier);
+        K = secret;
       }
       get{
         return BitConverter.ToString(K).Replace("-","");
       }
-      
+
     }
-    
+
+
+    /// <summary>
+    /// This is the counter that is used to salt the hash when generating the password.
+    /// Defined to be 8 bytes, high order first.
+    /// </summary>
+    protected byte[] C;
+    public virtual long Counter{
+      get{
+        long result = 0;
+        for (int i=0; i<8; i++) {
+          result = result << (i * 8);
+          result |= C [i];
+        }
+        return result;
+      }
+      set{
+        for(int i=0;i<8;i++)
+          C[7-i]=(byte)(value>>(i*8));
+      }
+    }
+
+    /// <summary>
+    /// Gets the hash that can be used to generate the hotp value.
+    /// </summary>
+    protected byte[] Hash{
+      get{
+        return HMACHasher.ComputeHash (C);
+      }
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="yotp.HOTP"/> class.
+    /// </summary>
+    public HOTP(){
+      HMACHasher = new HMACSHA1 ();
+      C = new byte[8];
+    }
+
     /// <summary>
     /// Truncate the hash as specified in RFC 4226.
     /// </summary>
@@ -115,14 +140,34 @@ namespace yotp {
     /// <summary>
     /// The hotp value. Really just forward to truncate.
     /// </summary>
-    public int Value {
-      get { return Truncate (); }
+    public virtual int Value {
+      get { return Truncate () & 0x7fffffff; }
     }
   }
 
   class TOTP: HOTP {
     public const long DefaultTimeStep = 30;
-    
+
+    /// <summary>
+    /// Time zero. The unix epoch.
+    /// </summary>
+    protected static readonly long T0 = 0;
+    protected static readonly DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// Unix time for the specified t.
+    /// </summary>
+    /// <param name="t">Time. Perhaps epoch or DateTime.UtcNow.</param>
+    protected static long unixtime (DateTime t) {
+      return (long)(t - epoch).TotalSeconds;
+    }
+    /// <summary>
+    /// Get current unixtime.
+    /// </summary>
+    protected static long unixtime() {
+      return unixtime (DateTime.UtcNow);
+    }
+
     /// <summary>
     /// The timestep, with variable name chosen by rfc 6238.
     /// </summary>
@@ -138,62 +183,42 @@ namespace yotp {
         X=value;
       }
     }
-    
+    /// <summary>
+    /// Initializes a new instance of the <see cref="yotp.TOTP"/> class.
+    /// </summary>
+    public TOTP(){
+      X = DefaultTimeStep;
+    }
+    /// <summary>
+    /// The totp value. Update Counter with the time, then forward to truncate.
+    /// </summary>
+    public override int Value {
+      get{
+        Counter = (unixtime() - T0) / X;
+        return base.Value;
+      }
+    }
   }
   class MainClass {
-    /// <summary>
-    /// Time zero. The unix epoch.
-    /// </summary>
-    protected static readonly long T0 = 0;
-    protected static readonly DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-   protected static readonly long X = 30;
-
-    /// <summary>
-    /// Unix time for the specified t.
-    /// </summary>
-    /// <param name="t">Time. Perhaps epoch or DateTime.UtcNow.</param>
-    protected static long unixtime (DateTime t) {
-      return (long)(t - epoch).TotalSeconds;
-    }
-    /// <summary>
-    /// Get current unixtime.
-    /// </summary>
-    protected static long now() {
-      return unixtime (DateTime.UtcNow);
-    }
-    /// <summary>
-    /// Get the byte array of the specified counter, high order first.
-    /// </summary>
-    /// <param name="counter">Counter.</param>
-    protected static byte[] countbytes(long count_int) {
-      byte[] result = new byte[8];
-      for(int i=0;i<8;i++)
-        result[7-i]=(byte)(count_int>>(i*8));
-      return result;
-    }
-
-
-
     public static int Main (string[] args) {
       if (0==args.Length) {
 				Console.WriteLine ("usage: yotp secret1 secret2 ...");
 				return 1;
-			}
+	  }
       foreach (string secret in args) {
+        TOTP totp = new TOTP ();
         //checking for mods is far from foolproof, but better than checking the length
         if(0 == secret.Length%5)
-          K = hex_key (secret);
+          totp.hex_secret = secret;
         else if(0 == secret.Length%8)
-          K = base32_key(secret);
+          totp.base32_secret = secret;
         else
         {
           Console.WriteLine ("I don't know what to do with this secret");
           break;
         }
 
-        byte[] C = countbytes ((now () - T0) / X);
-        int hotp = Truncate (HMAC_SHA_1(K,C)) & 0x7fffffff;
-        Console.WriteLine ((hotp % (int)Math.Pow (10, 6)).ToString ("D6"));
+        Console.WriteLine (secret + " is "+(totp.Value % (int)Math.Pow (10, 6)).ToString ("D6"));
 			}
       return 0;
 		}
